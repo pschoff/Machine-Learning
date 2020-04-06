@@ -1,0 +1,337 @@
+---
+title: "Homework 2"
+author: "Prof. Chouldechova"
+date: ''
+output: 
+  html_document:
+    toc: true
+    toc_depth: 3
+    theme: cerulean
+    highlight: tango
+---
+
+### Preamble: Loading packages, bikes data
+
+```{r}
+library(ggplot2)
+library(plyr)
+library(ISLR)
+library(MASS)
+library(knitr)
+library(splines)
+library(gam)
+
+cbPalette <- c("#999999", "#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+
+options(scipen = 4)
+
+# Load bikes data
+bikes <- read.csv("http://www.andrew.cmu.edu/user/achoulde/95791/data/bikes.csv", header = TRUE)
+
+# Transform temp and atemp to degrees C instead of [0,1] scale
+# Transform humidity to %
+# Transform wind speed (multiply by 67, the normalizing value)
+
+bikes <- transform(bikes,
+                   temp = 47 * temp - 8,
+                   atemp = 66 * atemp - 16,
+                   hum = 100 * hum,
+                   windspeed = 67 * windspeed)
+
+# The mapvalues() command from the plyr library allows us to easily
+# rename values in our variables.  Below we use this command to change season
+# from numeric codings to season names.
+
+bikes <- transform(bikes, 
+                   season = mapvalues(season, c(1,2,3,4), 
+                                      c("Winter", "Spring", "Summer", "Fall")))
+```
+
+### Problem 1 [7 points]: Placing knots, choosing degrees of freedom
+
+> This question is intended to provide you with practice on manual knot placement, and to improve your understanding of effective degrees of freedom selection for smoothing splines.
+
+> The following command loads a data frame called `spline.data` into your workspace.  This question gets you to analyse `spline.data`.  
+
+```{r}
+con <- url("http://www.andrew.cmu.edu/user/achoulde/95791/data/splines.Rdata")
+load(con)
+close(con)
+```
+
+##### **(a)** Use `qplot` to plot the data, and use `stat_smooth` to overlay a cubic spline with 9 degrees of freedom.  
+
+```{r, fig.height = 4, fig.width = 8}
+qplot(data = spline.data, x = x, y = y, colour = I(cbPalette[1])) +
+  stat_smooth(method = "lm", formula = y ~ bs(x, 9)) +
+  theme_bw()
+```
+
+##### **(b)** The following command forms the basis functions that get used by the `lm` command to fit a cubic spline with 9 degrees of freedom.  Explore this object that is constructed to figure out how many knots are placed, and where the knots are located.  How many knots are placed?  Where are they placed?
+
+```{r}
+basis.obj <- with(spline.data, bs(x, 9))
+attr(basis.obj, "knots")
+```
+
+- `length(attr(basis.obj, "knots"))` internal knots are placed by the method
+- They are placed at evenly spaced quantiles of the x variable, as indicated in the output above.  
+
+##### **(c)** Instead of specifying the degrees of freedom to the `bs()` function, now try manually selecting knots.  You should supply a `knots` vector containing 6 values.  Try to pick the knots as optimally as possible.  Use `qplot` and `stat_smooth` to show a plot of the data with the cubic spline with your choice of knots overlaid.  Explain your choice of knot location.
+
+```{r, fig.height = 4, fig.width = 8}
+knot.locs <- c(2, 5.6, 6.35, 7.5, 8.4, 9.4)
+qplot(data = spline.data, x = x, y = y, colour = I(cbPalette[1])) +
+  stat_smooth(method = "lm", 
+              formula = y ~ bs(x, knots = knot.locs)) +
+  geom_vline(xintercept = knot.locs, lty = 2) +
+  theme_bw()
+```
+
+- The plot above shows the cubic spline fit obtained with manual knot selection.  Vertical dashed lines indicate the x-values at which the 6 knots where placed.  
+- We placed only one knot in the first half of the data.  The data appeared to be quite slowly varying for x values between 0 and 5, and two cubics were sufficient to describe the variation in that range.  The data started to oscillate more rapidly in the x > 5 region.  We placed our remaining knots at roughly the local minima and maxima of the data.  A visual assessment indicates that this produces a good fit.
+- There are other options for knot placement that would have yielded good results.  All options would place most of the knots in the x > 5 region.  
+
+##### **(d)** Use the `lm` function to fit two models:  One using the model from part (a), and another using the model you settled on in part (c).  Compare the R-squared values.  Which model better fits the data?
+
+```{r}
+# Default knot placement
+lm.default <- lm(y ~ bs(x, 9), data = spline.data)
+# Manual knot placement
+lm.manual <- lm(y ~ bs(x, knots = knot.locs), data = spline.data)
+
+# R-squared values:
+summary(lm.default)$r.squared
+summary(lm.manual)$r.squared
+```
+
+- The R-squared of the cubic spline with the default choice of knots is `r summary(lm.default)$r.squared`, which is *much* lower than the R-squared of `r summary(lm.manual)$r.squared` for the model where we manually chose where to place the knots.  Our manually selected model is a much better fit to the data.
+- When the "wigglyness" of the data varies across the range of input values, placing knots at the quantiles is a sub-optimal choice.
+
+##### **(e)** Use the `smooth.spline` command with `cv = TRUE` to fit a smoothing spline to the data.  What degrees of freedom does the CV routine select for the smoothing spline?  How does this compare to the degrees of freedom of your model from part (c)?
+
+```{r}
+smooth.fit <- with(spline.data, smooth.spline(x, y, cv = TRUE))
+smooth.fit$df
+```
+
+- The built-in CV routine selects a smoothing spline with a total `r smooth.fit$df` effective degrees of freedom.  Our model in part (c) uses: # knots + $3 + 1$(Intercept) = 10 total degrees of freedom, yet it describes the data very well.
+
+##### **(f)** Use the `smooth.spline` command with `cv = TRUE` to fit a smoothing spline to the first half of the data (x <= 5.0).  What degrees of freedom does the CV routine select for this smoothing spline?
+
+```{r}
+smooth.fit.first <- with(spline.data[spline.data$x <= 5,], 
+                         smooth.spline(x, y, cv = TRUE))
+smooth.fit.first$df
+```
+
+- For describing the first half of the data, a smoothing spline with `r smooth.fit.first$df` effective degrees of freedom appears sufficient.  This is much less than half of the total degrees of freedom the CV routine chose to describe the full data in part (e).
+
+##### **(g)** Repeat part (f), this time fitting the smoothing spline on just the second half of the data (`x` > 5.0).  How does the optimal choice for the second half of the data compare to the optimal choice for the first half.  Are they very different?  Can you explain what's happening?
+
+```{r}
+smooth.fit.second <- with(spline.data[spline.data$x > 5,], 
+                          smooth.spline(x, y, cv = TRUE))
+smooth.fit.second$df
+```
+
+- For describing the second half of the data, a smoothing spline with `r smooth.fit.second$df` effective degrees of freedom appears sufficient.  While the number of points in each half of the data is the same, the data is much more "wiggly" in the second half of the data.  Thus we require a more complex model to accurately capture the trends in the data.
+
+    
+### Problem 2 [13 points]: Cross-validation
+
+##### **(a)** [7 points] Code up `smoothCV()` according to the specification above.  A function header is provided for you to get you started.
+
+```{r}
+# Function that trains a degree d polynomial on the training data
+# and returns its prediction error on the test data
+# It is assumed that train and test are data frames, with 2 columns, the
+# first named x, the second named y
+# Output: The test MSE of the model
+polyTestErr <- function(dat, train, d) {
+  poly.fit <- lm(y ~ poly(x, degree = d), data = dat, subset = train)
+  preds <- predict(poly.fit, dat)[-train]
+  mean((dat$y[-train] - preds)^2)
+}
+
+# Function that trains a cubic spline with df degrees of freedom
+# The model is fit on the training data, 
+# and  its prediction error is calculated on the test data
+# It is assumed that train and test are data frames, with 2 columns, the
+# first named x, the second named y
+# Output: The test MSE of the model
+cubicSplineTestErr <- function(dat, train, df) {
+  if(df >= 3) {
+    spline.fit <- lm(y ~ bs(x, df = df), data = dat, subset = train)
+    preds <- predict(spline.fit, dat)[-train]
+    mean((dat$y[-train] - preds)^2)
+  } else {
+    NA
+  }
+}
+
+# Function that trains a smoothing spline with df degrees of freedom
+# The model is fit on the training data, 
+# and  its prediction error is calculated on the test data
+# It is assumed that train and test are data frames, with 2 columns, the
+# first named x, the second named y
+# Output: The test MSE of the model
+smoothSplineTestErr <- function(dat, train, df) {
+  if(df > 1) {
+    spline.fit <- with(dat, smooth.spline(x[train], y[train], df = df))
+    preds <- predict(spline.fit, dat$x)$y[-train]
+    mean((dat$y[-train] - preds)^2)
+  } else {
+    NA
+  }
+}
+
+smoothCV <- function(x, y, K = 10, df.min = 1, df.max = 10) {
+  dat <- data.frame(x = x, y = y)
+  n <- length(y) # number of observations
+  
+  num.methods <- 3
+  method.names <- c("poly", "cubic.spline", "smoothing.spline")
+  err.out <- data.frame(df = rep(df.min:df.max, each = num.methods),
+                        method = rep(method.names, df.max - df.min + 1))
+  
+  # Get a random permutation of the indexes
+  random.perm <- sample(n)
+  # break points for the folds.  If n is not evenly divisible by K,
+  # these may not be of exactly the same size.
+  fold.breaks <- round(seq(1,n+1, length.out = K + 1))
+  fold.start <- fold.breaks[1:K]
+  fold.end <- fold.breaks[2:(K+1)] - 1
+  fold.end[K] <- n # Fix the last endoint to equal n
+  fold.size <- fold.end - fold.start + 1 # num obs in each fold
+  
+  cv.err <- NULL
+  fold.err <- matrix(0, nrow = K, ncol = 3)
+  colnames(fold.err) <- c("poly", "cubic.spline", "smoothing.spline")
+  # Outer loop: Iterate over the K folds
+  # Inner loop: Loop over degrees of freedom
+  for(df in df.min:df.max) {
+    for(k in 1:K) {
+      test.idx <- fold.start[k]:fold.end[k]
+      train <- random.perm[-test.idx]
+      
+      # Calculate test error for the three models
+      poly.err <- polyTestErr(dat, train = train, d = df)
+      cubic.spline.err <- cubicSplineTestErr(dat, train = train, df = df)
+      smooth.spline.err <- smoothSplineTestErr(dat, train = train, df = df)
+      
+      # Store results for this fold
+      fold.err[k,] <- c(poly.err, cubic.spline.err, smooth.spline.err)
+#       print(fold.err[k,])
+    }
+    # Perform weighted averaging to calculate CV error estimate
+    # MSE estimates from each fold are weighted by the size of the fold
+    # If all folds are the same size, this is the same thing as the unweighted
+    # average of all of the MSE's
+    err.ave <- colSums(sweep(fold.err, MARGIN = 1, fold.size, FUN = "*") / n)
+    cv.err <- c(cv.err, err.ave)
+  }
+  err.out$cv.error <- cv.err
+  err.out
+}
+```
+
+##### **(b)** [2 points] Write a function for plotting the results of `smoothCV()`.  
+
+
+```{r}
+library(plyr)
+# This plotting approach has a facet option which allows the user to show
+# three separate plots instead of overlaying the curves
+# If y.scale.factor is non-null, the range of the 
+# y-axis for the plot is restricted to y.min to y.min*y.scale.factor
+plot.smoothCV <- function(smoothcv.err, K, title.text = "", facet = FALSE,
+                          y.scale.factor = NULL) {
+  dat <- transform(smoothcv.err, 
+                   method = mapvalues(method,
+                                      c("poly", "cubic.spline", "smoothing.spline"),
+                                      c("Polynomial", "Cubic spline", "Smoothing Spline")
+                                      )
+                   )
+  x.text <- "Degrees of Freedom"
+  y.text <- paste0(K, "-fold CV Error")
+  p <- ggplot(data = dat, aes(x = df, y = cv.error, colour = method)) 
+  p <- p + geom_line() + geom_point() + xlab(x.text) + ylab(y.text) +
+          ggtitle(title.text)
+  
+  if(!is.null(y.scale.factor)) {
+    min.err <- min(dat$cv.error, na.rm = TRUE)
+    p <- p + ylim(min.err, y.scale.factor * min.err)
+  }
+  
+  if(!facet) {
+    print(p)
+  } else {
+    print(p + facet_wrap("method"))
+  }
+}
+```
+
+##### **(c)**  You saw the `bikes` data on Homework 1.  Use your `smoothCV` function with 10-fold cross-validation to determine the best choice of model and degrees of freedom for modeling the relationship between `cnt` and each of these inputs: `mnth`, `atemp`, `hum`, and `windspeed`.  Use your `plot.smoothCV` plotting routine to support your choice of model for each of the inputs.  
+
+```{r, fig.height = 4, fig.width = 8, cache = TRUE}
+cv.mnth <- smoothCV(x = bikes$mnth, y = bikes$cnt, df.min = 1, df.max = 10)
+plot.smoothCV(cv.mnth, K = 10, title.text = "CV Error: cnt ~ mnth")
+
+cv.atemp <- smoothCV(x = bikes$atemp, y = bikes$cnt, df.min = 1, df.max = 10)
+plot.smoothCV(cv.atemp, K = 10, title.text = "CV Error: cnt ~ atemp")
+
+cv.hum <- smoothCV(x = bikes$hum, y = bikes$cnt, df.min = 1, df.max = 10)
+plot.smoothCV(cv.hum, K = 10, title.text = "CV Error: cnt ~ hum",
+              y.scale.factor = 1.1)
+
+cv.windspeed <- smoothCV(x = bikes$windspeed, y = bikes$cnt, df.min = 1, df.max = 10)
+plot.smoothCV(cv.windspeed, K = 10, title.text = "CV Error: cnt ~ windspeed", 
+              y.scale.factor = 1.05)
+```
+
+
+- `mnth`:  We choose a degree-2 polynomial model: `poly(mnth, 2`.  This model nas nearly the lowest 10-fold CV error of all the degrees of freedom and all the models we looked at, and it performs considerably better than the linear fit.  
+
+- `atemp`:  A cubic polynomial model appears to do well here: `poly(atemp, 3)`.  The `df = 7` cubic spline has the lowest error, but its CV curve bounces around a fair bit, so it's not clear that the added gains are worth the increased complexity. 
+
+- `hum`: For this, we select a smoothing spline with 4 degrees of freedom: `s(hum, 4)`.  This choice has nearly the smallest error (beaten only by the cubic polynomial fit).  However, the high variability in the CV error estimates for higher degree polynomial fits and higher degree cubic splines suggests that these models may be unreliable.  
+    - A look back at the data helps us to see why this might be happening.  Here's a scatterplot of `cnt` vs `hum`.  We can clearly see that there are two points in the `hum` < 25 range that look like outliers.  Humidity levels of under 25% are extremely rare, and may be due to measurement error.  The cubic spline and polynomial regression will overfit to these points as we increase their degrees of freedom.  The smoothing spline is much better behaved in general, and will ignore such outliers.  This is one instance where the advantage of smoothing splines is clear:  We get a *natural cubic spline* whose variability is explicitly dampened by the penalty term in the smoothing spline objective.  Smoothing splines tend to have very nice behavior even if the edges of the data are poorly behaved.
+    
+<center>
+```{r, fig.height = 4, fig.width = 5}    
+qplot(data = bikes, x=hum, y = cnt)
+```
+</center>
+
+- `windspeed` A linear model appears to work well here, as does a smoothing spline with 6 degrees of freedom.  We will go with a linear model: `~ windspeed`.  
+
+##### **(d)** Use the `gam` library and the models you selected in part (c) to fit an additive model of `cnt` on `mnth`, `atemp`, `hum` and `windspeed`.  
+
+```{r, fig.height = 4, fig.width = 8}
+gam.fit <- gam(cnt ~ poly(mnth, 2) + poly(atemp, 3) + s(hum, 4) + windspeed,
+               data = bikes)
+par(mfrow = c(1, 4))
+plot(gam.fit, se = TRUE, col = 'steelblue', lwd = 2)
+```
+
+##### **(e)** Use your model from part **(d)** to calculate the "% deviance explained" by your model.  
+
+> The "% deviance explained" is the Generalized Additive Model analog of R-squared.  It is exactly equal to the R-squared for regression models that can be fit with both the `gam` and `lm` functions.  If you have a fitted `gam` model called, say, `gam.fake`, you can calculate the % deviance explained with the following syntax:
+
+```{r, eval = FALSE}
+1 - gam.fake$deviance / gam.fake$null.deviance
+```
+
+```{r}
+1 - gam.fit$deviance / gam.fit$null.deviance
+```
+
+##### **(f)** Compare the % deviance explained of your Additive Model to the R-squared from running a linear regression of `cnt` on the same input variables.  Does the Additive Model considerably outperform the linear regression model?
+
+```{r}
+bikes.lm <- lm(cnt ~ mnth + atemp + hum + windspeed, data = bikes)
+summary(bikes.lm)$r.squared
+```
+
+- The % deviance explained of the additive model is much larger than the R-squared of the linear regression fit.  The additive model considerably outperforms the linear regression model.
